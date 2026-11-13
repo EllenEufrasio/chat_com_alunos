@@ -1,4 +1,4 @@
-# FinBot
+# PASIbot
 
 Assistente educacional para aprender conceitos sobre investimentos no Brasil. Este projeto está sendo desenvolvido passo a passo como parte das aulas.
 
