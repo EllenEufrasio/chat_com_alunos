@@ -1,5 +1,5 @@
 # frontend/streamlit_app.py
-"""Front do FinBot em Streamlit. Ele NÃO fala com o LLM: só chama a API.
+"""Front do PASIbot em Streamlit. Ele NÃO fala com o LLM: só chama a API.
 
 Local:   streamlit run frontend/streamlit_app.py
 Nuvem:   Streamlit Community Cloud (API_URL nos Secrets aponta para a API no Render)
@@ -35,8 +35,8 @@ def api(metodo: str, caminho: str, **kwargs):
 
 
 # Configuração e cabeçalho da página.
-st.set_page_config(page_title="FinBot", page_icon="💬")
-st.title("💬 FinBot")
+st.set_page_config(page_title="PASIbot", page_icon="💬")
+st.title("💬 PASIbot")
 st.caption("Chat educacional sobre serviços públicos de assistência social, focado no projeto PASI.")
 
 # st.session_state guarda valores entre um clique e outro (o script roda de novo a cada interação)
@@ -44,8 +44,39 @@ st.caption("Chat educacional sobre serviços públicos de assistência social, f
 if "sessao" not in st.session_state:
     st.session_state.sessao = str(uuid.uuid4())[:8]
     st.session_state.mensagens = []
-usuario = "aluno1"  # fixo por enquanto; na Aula 3 o usuário poderá ser escolhido na tela
+with st.sidebar:
+    # Campo para escolher o usuário (cada um tem perfil e conversas próprios).
+    usuario = st.text_input("Seu usuário", value="aluno1")
 
+    with st.expander("Meu perfil"):
+        # Busca o perfil salvo para preencher o formulário.
+        perfil = api("GET", f"/usuarios/{usuario}/perfil")
+        # st.form agrupa os campos: nada é enviado até clicar no botão.
+        with st.form("perfil"):
+            nome = st.text_input("Nome", perfil.get("nome", ""))
+            objetivo = st.text_input("Objetivo", perfil.get("objetivo", ""))
+            niveis = ["", "iniciante", "intermediário", "avançado"]
+            # Se o nível salvo estiver na lista, ele já aparece selecionado.
+            atual = perfil.get("experiencia", "")
+            experiencia = st.selectbox("Experiência", niveis, index=niveis.index(atual) if atual in niveis else 0)
+            # Ao clicar, envia o perfil para a API (PUT) e mostra a confirmação.
+            if st.form_submit_button("Salvar perfil"):
+                api("PUT", f"/usuarios/{usuario}/perfil",
+                    json={"nome": nome, "objetivo": objetivo, "experiencia": experiencia})
+                st.success("Perfil salvo!")
+
+    # Nova conversa = novo id de sessão e tela limpa.
+    if st.button("➕ Nova conversa", use_container_width=True):
+        st.session_state.sessao = str(uuid.uuid4())[:8]
+        st.session_state.mensagens = []
+
+    st.subheader("Conversas")
+    # Um botão por conversa; ao clicar, carrega o histórico dela pela API.
+    # key=c["sessao"]: o Streamlit exige um identificador único para cada botão.
+    for c in api("GET", f"/usuarios/{usuario}/conversas"):
+        if st.button(c["titulo"], key=c["sessao"], use_container_width=True):
+            st.session_state.sessao = c["sessao"]
+            st.session_state.mensagens = api("GET", f"/sessoes/{c['sessao']}/mensagens")
 
 def mostrar(m: dict):
     """Desenha uma mensagem no chat, com o balão do usuário ou do assistente."""

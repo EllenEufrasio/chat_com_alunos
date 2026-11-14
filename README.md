@@ -1,10 +1,10 @@
-# FinBot
+# PASIBot
 
 Assistente educacional para aprender conceitos sobre investimentos no Brasil. Este projeto está sendo desenvolvido passo a passo como parte das aulas.
 
 ## Etapa atual
 
-Na Aula 1, o projeto tem uma conversa inicial pelo terminal. O FinBot responde a perguntas gerais sobre investimentos e mantém o histórico durante a conversa.
+Na Aula 1, o projeto tem uma conversa inicial pelo terminal. O PASIbot responde a perguntas gerais sobre investimentos e mantém o histórico durante a conversa.
 
 ## Requisitos
 
@@ -13,7 +13,7 @@ Na Aula 1, o projeto tem uma conversa inicial pelo terminal. O FinBot responde a
 
 ## Como configurar no Windows
 
-Abra o projeto no VS Code e, no terminal integrado, confirme que está na pasta principal `finbot`. Execute os comandos abaixo, um de cada vez:
+Abra o projeto no VS Code e, no terminal integrado, confirme que está na pasta principal `PASIbot`. Execute os comandos abaixo, um de cada vez:
 
 ```powershell
 py -3.12 -m venv .venv
