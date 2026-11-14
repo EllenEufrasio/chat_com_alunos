@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # PASIBot
+=======
+# PASIbot
+>>>>>>> 4fec6cc0c0ddc2ad035a08abf6add8b75feb2960
 
 Assistente educacional para aprender conceitos sobre investimentos no Brasil. Este projeto está sendo desenvolvido passo a passo como parte das aulas.
 
