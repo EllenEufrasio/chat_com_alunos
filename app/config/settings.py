@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     mongo_url: str = "mongodb://localhost:27017"
     mongo_banco: str = "PASIbot"  # nome do banco de dados dentro do servidor
 
+    # Aula 4 — ferramentas
+    max_passos_agente: int = 5  # guardrail: no máximo 5 voltas no loop de tools
+
     @property
     def modelo(self) -> str:
         return self.llm_modelo or MODELOS_PADRAO[self.llm_provedor]

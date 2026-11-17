@@ -3,6 +3,7 @@
 Grafo = NÓS (funções) + ARESTAS (quem vem depois) + ESTADO (o "bastão" que passa de nó em nó).
 
 Aula 3:   START ─▶ chatbot ─▶ END        (+ checkpointer = memória de curto prazo)
+Aula 4:   um AGENTE com ferramentas (pensar ⇄ ferramentas), ver app/agents/base.py.
 """
 from functools import lru_cache  # guarda o grafo pronto para não montar de novo a cada pergunta
 from typing import Annotated, TypedDict
@@ -11,9 +12,11 @@ from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
+from app.agents.base import criar_agente, fontes_do_turno
 from app.agents.chatbot import no_chatbot
 from app.llm.observabilidade import callbacks, rastrear
 from app.repository import checkpointer, conversas, perfis
+from app.tools.unidades import FERRAMENTAS_PASI
 from app.utils.mensagens import conversa_limpa
 
 
@@ -26,13 +29,8 @@ class EstadoChat(TypedDict, total=False):
 
 # ---------- Montagem ----------
 def montar_grafo(memoria=None):
-    # Cria o grafo, registra o nó "chatbot" e liga START -> chatbot -> END.
-    g = StateGraph(EstadoChat)
-    g.add_node("chatbot", no_chatbot)
-    g.add_edge(START, "chatbot")
-    g.add_edge("chatbot", END)
-    # compile() deixa o grafo pronto para rodar; o checkpointer salva o estado a cada passo.
-    return g.compile(checkpointer=memoria)
+    # Aula 4: o grafo agora é o agente com ferramentas (o loop pensar ⇄ ferramentas de base.py).
+    return criar_agente("pasibot", "sistema", FERRAMENTAS_PASI, checkpointer=memoria)
 
 
 @lru_cache
@@ -54,7 +52,10 @@ def executar(pergunta: str, sessao: str, usuario: str = "anonimo") -> dict:
 
     # A última mensagem do estado é a resposta do PASIbot.
     final = estado["messages"][-1]
-    return {"resposta": final.content, "agente": "conversa", "fontes": []}
+    # Posição da última pergunta do usuário: as fontes são só deste turno.
+    ultima_pergunta = max(i for i, m in enumerate(estado["messages"]) if isinstance(m, HumanMessage))
+    fontes = fontes_do_turno(estado["messages"][ultima_pergunta:])
+    return {"resposta": final.content, "agente": "pasibot", "fontes": fontes}
 
 
 def historico(sessao: str) -> list[dict]:

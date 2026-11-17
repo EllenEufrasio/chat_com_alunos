@@ -24,6 +24,7 @@ ARGS_PADRAO = {
     "indicadores_fii": {"ticker": "MXRF11"},
     "tesouro_direto": {"simbolo": "tesouro-selic-01032031"},
     "simular_investimento": {"valor": 1000, "meses": 24, "percentual_cdi": 110},
+    "buscar_unidade": {"tipo": "CAPS", "municipio": "Mauá", "uf": "SP"},
 }
 
 
@@ -97,6 +98,53 @@ def get_json_falso(url, params=None):
         return {"results": [{"symbol": "tesouro-selic-01032031", "bondType": "Tesouro Selic",
                              "maturityDate": "2031-03-01", "baseDate": "2026-10-21", "buyRate": 0.08,
                              "buyPrice": 18944.78, "rateInfo": {"description": "spread sobre a Selic"}}]}
+    if "servicodados.ibge.gov.br" in url:  # lista de cidades de uma UF
+        return [{"id": 3529401, "nome": "Mauá"}, {"id": 3550308, "nome": "São Paulo"}]
+    if "viacep.com.br" in url:  # CEP -> cidade (só o CEP de teste existe)
+        if "09321090" in url:
+            return {"cep": "09321-090", "bairro": "VILA BOCAINA", "localidade": "Mauá", "uf": "SP", "ibge": "3529401"}
+        return {"erro": "true"}
+    if "brasilapi.com.br" in url:  # CEP -> coordenadas (bem perto do CAPS AD)
+        return {"cep": "09321090", "location": {"type": "Point",
+                "coordinates": {"latitude": "-23.6890", "longitude": "-46.4410"}}}
+    if "sagi/servicos/equipamentos" in url:  # CRAS/CREAS do MDS (formato Solr)
+        tipo = [f for f in params["fq"] if f.startswith("tipo_equipamento:")][0].split(":")[1]
+        docs = {
+            "CRAS": [
+                {"nome": "CRAS ZAIRA", "tipo_equipamento": "CRAS", "telefone": "1145551234",
+                 "endereco": "RUA DO CRAS", "numero": "10", "bairro": "JARDIM ZAIRA", "cep": "09321-000",
+                 "georef_location": "-23.6895,-46.4405", "data_atualizacao": "2026-06-01T03:00:00Z"},
+                {"nome": "CRAS CENTRO", "tipo_equipamento": "CRAS", "telefone": "1145559999",
+                 "endereco": "RUA CENTRAL", "numero": "5", "bairro": "CENTRO", "cep": "09310-000",
+                 "georef_location": "-23.6670,-46.4610", "data_atualizacao": "2026-06-01T03:00:00Z"},
+            ],
+            "CREAS": [
+                {"nome": ["CREAS MAUA"], "tipo_equipamento": ["CREAS"], "telefone": ["1145557777"],
+                 "endereco": ["AVENIDA DO CREAS"], "numero": ["300"], "bairro": ["CENTRO"]},
+            ],
+        }[tipo]
+        return {"response": {"numFound": len(docs), "docs": docs}}
+    if "cnes/estabelecimentos" in url:  # CAPS (codigo_tipo_unidade=70) de Mauá
+        if (params or {}).get("offset", 0) > 0:
+            return {"estabelecimentos": []}
+        return {"estabelecimentos": [
+            {"codigo_cnes": 1111111, "nome_fantasia": "CAPS II ADULTO MAUA", "codigo_tipo_unidade": 70,
+             "latitude_estabelecimento_decimo_grau": -23.6670, "longitude_estabelecimento_decimo_grau": -46.4610,
+             "endereco_estabelecimento": "RUA EXEMPLO", "numero_estabelecimento": "100",
+             "bairro_estabelecimento": "CENTRO", "codigo_cep_estabelecimento": "09310000",
+             "numero_telefone_estabelecimento": "(11) 4555-0000",
+             "descricao_turno_atendimento": "ATENDIMENTOS NOS TURNOS DA MANHA E A TARDE",
+             "codigo_motivo_desabilitacao_estabelecimento": None, "data_atualizacao": "2026-10-01"},
+            {"codigo_cnes": 2222222, "nome_fantasia": "CAPS AD III MAUA", "codigo_tipo_unidade": 70,
+             "latitude_estabelecimento_decimo_grau": -23.6900, "longitude_estabelecimento_decimo_grau": -46.4400,
+             "endereco_estabelecimento": "AVENIDA TESTE", "numero_estabelecimento": "200",
+             "bairro_estabelecimento": "VILA BOCAINA", "codigo_cep_estabelecimento": "09320000",
+             "numero_telefone_estabelecimento": "(11) 4555-1111",
+             "descricao_turno_atendimento": "ATENDIMENTO CONTINUO DE 24 HORAS",
+             "codigo_motivo_desabilitacao_estabelecimento": None, "data_atualizacao": "2026-10-01"},
+            {"codigo_cnes": 3333333, "nome_fantasia": "CAPS DESATIVADO", "codigo_tipo_unidade": 70,
+             "codigo_motivo_desabilitacao_estabelecimento": "01"},
+        ]}
     raise ValueError(f"URL inesperada no teste: {url}")
 
 
@@ -121,6 +169,13 @@ def falso(monkeypatch):
     try:  # Aula 4+: APIs de mercado falsas
         from app.tools import mercado
         monkeypatch.setattr(mercado, "get_json", get_json_falso)
+    except ImportError:
+        pass
+
+    try:  # Aula 4 (PASIbot): APIs do CNES e do IBGE falsas
+        from app.tools import unidades
+        monkeypatch.setattr(unidades, "get_json", get_json_falso)
+        unidades._municipios_da_uf.cache_clear()
     except ImportError:
         pass
 
