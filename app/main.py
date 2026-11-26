@@ -19,7 +19,11 @@ app = FastAPI(title="PASIBot API", description="Assistente do PASI: CRAS, CREAS 
 REDE_LOCAL = r"^http://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?$"
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://pasi-landing-page.onrender.com"],
+    allow_origins=[
+        "https://pasi-landing-page.onrender.com",
+        "https://pasi-landing-page-dev.onrender.com",
+        "http://localhost:5173",
+    ],
     allow_origin_regex=REDE_LOCAL,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
