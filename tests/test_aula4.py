@@ -1,7 +1,7 @@
 # tests/test_aula4.py
 """Aula 4 — ferramenta buscar_unidade (CAPS, CRAS, CREAS) e o loop de tool-calling."""
 # A fixture falso também troca as APIs (CNES, MDS, IBGE, ViaCEP, BrasilAPI) por respostas fixas.
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agents import grafo
 from app.agents.base import criar_agente
@@ -76,8 +76,8 @@ def test_entradas_invalidas(falso):
     assert "erro" in unidades.buscar_unidade.invoke({"tipo": "CAPS", "municipio": "Atlântida", "uf": "SP"})
 
 
-# Se o MDS cair, a ferramenta indica o mapa oficial (MOPS) em vez de quebrar.
-def test_mds_fora_do_ar_indica_alternativa(falso, monkeypatch):
+# Se o MDS cair, a ferramenta usa a cópia local do Censo SUAS 2019 e avisa que pode estar desatualizada.
+def test_mds_fora_do_ar_usa_copia_local(falso, monkeypatch):
     original = unidades.get_json
 
     def mds_quebrado(url, params=None):
@@ -86,7 +86,49 @@ def test_mds_fora_do_ar_indica_alternativa(falso, monkeypatch):
         return original(url, params)
     monkeypatch.setattr(unidades, "get_json", mds_quebrado)
     saida = unidades.buscar_unidade.invoke({"tipo": "CRAS", "cep": "09321090"})
-    assert "erro" in saida and "mops" in saida["alternativa"]
+    assert saida["fonte"] == unidades.FONTE_SUAS_LOCAL
+    assert saida["municipio"] == "Mauá/SP"
+    assert saida["unidades"] and all("CRAS" in u["nome"] for u in saida["unidades"])
+    assert "2019" in saida["aviso"]
+    # o mais perto do CEP de teste vem primeiro
+    distancias = [u["distancia_km"] for u in saida["unidades"]]
+    assert distancias == sorted(distancias)
+
+
+# Depois de uma falha, o MDS fica 10 min sem ser chamado (cada tentativa demora).
+def test_mds_fora_do_ar_nao_e_chamado_de_novo(falso, monkeypatch):
+    chamadas = {"mds": 0}
+    original = unidades.get_json
+
+    def mds_quebrado(url, params=None):
+        if "sagi" in url:
+            chamadas["mds"] += 1
+            raise ValueError("resposta não é JSON")
+        return original(url, params)
+    monkeypatch.setattr(unidades, "get_json", mds_quebrado)
+    unidades.buscar_unidade.invoke({"tipo": "CRAS", "cep": "09321090"})
+    unidades.buscar_unidade.invoke({"tipo": "CREAS", "cep": "09321090"})
+    assert chamadas["mds"] == 1
+
+
+# Sem MDS e sem a cidade na cópia local: erro claro com alternativa, sem inventar endereço.
+def test_mds_fora_e_cidade_fora_da_copia(falso, monkeypatch):
+    def mds_quebrado(url, params=None):
+        raise ValueError("resposta não é JSON")
+    monkeypatch.setattr(unidades, "_suas_do_municipio", mds_quebrado)
+    monkeypatch.setattr(unidades, "_base_suas_local", lambda: {})
+    saida = unidades.buscar_unidade.invoke({"tipo": "CREAS", "municipio": "Mauá", "uf": "SP"})
+    assert "erro" in saida and "prefeitura" in saida["alternativa"]
+
+
+# A cópia local corrige acentos e tem as unidades de Mauá.
+def test_copia_local_tem_maua():
+    unidades._base_suas_local.cache_clear()
+    cras = unidades._suas_da_reserva(352940, "CRAS")
+    creas = unidades._suas_da_reserva(352940, "CREAS")
+    assert len(cras) >= 5 and len(creas) >= 1
+    assert any(u["endereco"] == "Rua AVARÉ, 62" for u in creas)
+    assert all(u["_lat"] and u["_lon"] for u in cras + creas)
 
 
 # Se a internet cair, a ferramenta devolve {"erro": ...} em vez de quebrar.
@@ -108,11 +150,40 @@ def test_loop_pede_ferramenta_e_responde_com_o_dado(falso):
 
 
 def test_guardrail_limita_as_voltas(falso, monkeypatch):
-    """Com limite de 1 passo, o agente pede a ferramenta e o código o interrompe."""
+    """Com limite de 1 passo, o agente pede a ferramenta, o código barra e ele responde SEM ferramentas."""
     monkeypatch.setattr(settings, "max_passos_agente", 1)
     agente = criar_agente("teste", "sistema", unidades.FERRAMENTAS_PASI)
     saida = agente.invoke({"messages": [HumanMessage("CAPS em Mauá?")]})
-    assert "poucos passos" in saida["messages"][-1].content
+    assert falso.chamadas == ["tool:buscar_unidade", "resposta"]
+    assert saida["messages"][-1].content.startswith("resposta de teste")
+
+
+def test_pedido_repetido_vai_para_a_resposta_final(falso, monkeypatch):
+    """Caso real: o modelo pedia a mesma busca de novo até estourar o limite."""
+    original = falso.invoke
+
+    def sempre_pede(self, mensagens, config=None):
+        if getattr(self, "_ferramentas", None):
+            self._registrar("tool:buscar_unidade", mensagens)
+            return AIMessage(content="", tool_calls=[{"name": "buscar_unidade",
+                                                      "args": {"tipo": "CAPS", "municipio": "Mauá", "uf": "SP"},
+                                                      "id": f"call_{len(self._dono.chamadas)}"}])
+        return original.__func__(self, mensagens, config)
+
+    monkeypatch.setattr(type(falso), "invoke", sempre_pede)
+    agente = criar_agente("teste", "sistema", unidades.FERRAMENTAS_PASI)
+    saida = agente.invoke({"messages": [HumanMessage("CAPS em Mauá?")]})
+    assert falso.chamadas == ["tool:buscar_unidade", "tool:buscar_unidade", "resposta"]
+    assert saida["messages"][-1].content.startswith("resposta de teste")
+
+
+def test_limite_conta_so_a_pergunta_atual(falso, monkeypatch):
+    """Caso real: o contador de voltas era salvo na conversa e bloqueava as perguntas seguintes."""
+    monkeypatch.setattr(settings, "max_passos_agente", 2)
+    falso.ferramenta = "buscar_unidade"
+    grafo.executar("Onde tem CAPS em Mauá?", sessao="c-limite")
+    grafo.executar("E outro CAPS em Mauá?", sessao="c-limite")
+    assert falso.chamadas.count("tool:buscar_unidade") == 2
 
 
 def test_nome_de_ferramenta_inventado_tenta_de_novo(falso, monkeypatch):

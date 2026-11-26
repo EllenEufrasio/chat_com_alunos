@@ -176,6 +176,7 @@ def falso(monkeypatch):
         from app.tools import unidades
         monkeypatch.setattr(unidades, "get_json", get_json_falso)
         unidades._municipios_da_uf.cache_clear()
+        monkeypatch.setitem(unidades._ESTADO_MDS, "fora_ate", 0.0)  # MDS "no ar" em cada teste
     except ImportError:
         pass
 

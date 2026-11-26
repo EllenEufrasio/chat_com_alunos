@@ -9,16 +9,21 @@ descrição vaga = chamada errada. Por isso a docstring abaixo é detalhada.
 Fontes gratuitas (sem cadastro e sem token):
 - CNES / Ministério da Saúde: estabelecimentos de saúde. codigo_tipo_unidade=70 = CAPS.
 - MDS (cadastro de equipamentos do SUAS, o mesmo do mapa MOPS): CRAS e CREAS.
+  Reserva: se o MDS cair, usamos app/data/unidades_suas_2019.csv (Censo SUAS 2019, ver
+  scripts/gerar_base_suas.py). Desde 21/10/2026 o MDS está fora do ar para manutenção.
 - IBGE (localidades): nome da cidade -> código IBGE.
 - ViaCEP: CEP -> cidade (código IBGE) e bairro.
 - BrasilAPI (CEP v2): CEP -> latitude e longitude, para ordenar por distância.
 
 O CNES e o MDS usam o código IBGE da cidade SEM o último dígito (São Paulo = 355030).
 """
+import csv
 import math
 import re
+import time
 import unicodedata
 from functools import lru_cache, wraps  # wraps preserva nome e docstring ao "embrulhar" uma função
+from pathlib import Path
 
 from langchain_core.tools import tool
 
@@ -45,6 +50,12 @@ POR_PAGINA = 20       # a API do CNES devolve no máximo 20 por página
 MAX_PAGINAS = 8       # até 160 CAPS (a cidade de São Paulo tem perto de 100)
 MAX_RESULTADOS = 10   # quantas unidades devolvemos ao modelo (mais que isso só gasta tokens)
 MAIS_PROXIMOS = 5     # com CEP, devolvemos só as 5 mais próximas
+
+# Reserva local de CRAS e CREAS, usada quando o cadastro do MDS não responde.
+BASE_SUAS_LOCAL = Path(__file__).parent.parent / "data" / "unidades_suas_2019.csv"
+FONTE_SUAS_LOCAL = "Censo SUAS 2019 (cópia local, usada porque o cadastro do MDS está fora do ar)"
+PAUSA_MDS_S = 600     # depois de uma falha, passa 10 min sem tentar o MDS (cada tentativa demora)
+_ESTADO_MDS = {"fora_ate": 0.0}  # num dicionário para os testes conseguirem zerar
 
 
 # Decorador: "embrulha" a ferramenta num try/except.
@@ -205,6 +216,40 @@ def _suas_do_municipio(codigo: int, tipo: str) -> list[dict]:
     return unidades
 
 
+@lru_cache(maxsize=1)
+def _base_suas_local() -> dict[tuple[str, str], list[dict]]:
+    """Lê a cópia local uma vez só e agrupa por (código da cidade, tipo)."""
+    grupos: dict[tuple[str, str], list[dict]] = {}
+    with open(BASE_SUAS_LOCAL, encoding="utf-8") as arquivo:
+        for linha in csv.DictReader(arquivo):
+            grupos.setdefault((linha["codigo_ibge"], linha["tipo"]), []).append(linha)
+    return grupos
+
+
+def _suas_da_reserva(codigo: int, tipo: str) -> list[dict]:
+    """CRAS ou CREAS do município na cópia local do Censo SUAS 2019."""
+    return [{
+        "nome": u["nome"],
+        "endereco": u["endereco"],
+        "bairro": u["bairro"] or None,
+        "cep": u["cep"] or None,
+        "telefone": _telefone(u["telefone"]),
+        "_lat": _float(u["lat"]),
+        "_lon": _float(u["lon"]),
+    } for u in _base_suas_local().get((str(codigo), tipo), [])]
+
+
+def _suas_com_reserva(codigo: int, tipo: str) -> tuple[list[dict], bool]:
+    """Tenta o MDS; se ele falhar (ou falhou há pouco), usa a cópia local. Devolve (unidades, usou_reserva)."""
+    if time.time() >= _ESTADO_MDS["fora_ate"]:
+        try:
+            return _suas_do_municipio(codigo, tipo), False
+        except Exception as erro:
+            print(f"[unidades] MDS fora do ar ({erro}); usando a cópia local por {PAUSA_MDS_S // 60} min")
+            _ESTADO_MDS["fora_ate"] = time.time() + PAUSA_MDS_S
+    return _suas_da_reserva(codigo, tipo), True
+
+
 def _modalidade_confere(nome: str, modalidade: str) -> bool:
     """Tipo de CAPS pelo nome (o CNES não tem um campo só para isso)."""
     palavras = _normalizar(nome).replace("-", " ").split()
@@ -281,18 +326,22 @@ def buscar_unidade(tipo: str, cep: str = "", municipio: str = "", uf: str = "",
                             "Confira o nome e a sigla do estado.", "fonte": "IBGE"}
         nome_cidade, codigo = achado
 
+    usou_reserva = False
     if tipo == "CAPS":
         unidades = _caps_do_municipio(codigo)
         modalidade = (modalidade or "").strip().upper()
         unidades = [u for u in unidades if _modalidade_confere(u["nome"] or "", modalidade)]
     else:
-        try:
-            unidades = _suas_do_municipio(codigo, tipo)
-        except Exception as erro:
-            # Se a API do MDS estiver fora do ar, indicamos o mapa oficial em vez de inventar.
-            return {"erro": f"o cadastro de {tipo} do MDS não respondeu agora ({erro}).",
-                    "alternativa": f"O usuário pode procurar no mapa oficial do governo ({MOPS}) "
-                                   "ou ligar para a Secretaria de Assistência Social da cidade.",
+        unidades, usou_reserva = _suas_com_reserva(codigo, tipo)
+        if usou_reserva:
+            fonte = FONTE_SUAS_LOCAL
+        if usou_reserva and not unidades:
+            # Nem o MDS nem a cópia local têm a cidade: indicamos quem pode informar, sem inventar.
+            return {"erro": f"o cadastro de {tipo} do MDS está fora do ar e a cópia local não tem "
+                            f"{tipo} para {nome_cidade}/{uf.upper()}.",
+                    "alternativa": "A pessoa pode ligar para a prefeitura (Secretaria de Assistência "
+                                   f"Social) ou procurar no mapa oficial do governo ({MOPS}), "
+                                   "quando ele voltar ao ar.",
                     "fonte": fonte}
 
     if bairro:
@@ -316,6 +365,10 @@ def buscar_unidade(tipo: str, cep: str = "", municipio: str = "", uf: str = "",
 
     aviso = ("Dados do cadastro oficial; horários e telefones podem mudar. Recomende ligar antes de ir. "
              "Copie nomes, endereços e telefones exatamente como estão aqui.")
+    if usou_reserva:
+        aviso = ("O cadastro do MDS está fora do ar. Estes dados são do Censo SUAS de 2019 e podem estar "
+                 "desatualizados: diga isso à pessoa e recomende ligar antes de ir ou confirmar com a "
+                 "prefeitura. Copie nomes, endereços e telefones exatamente como estão aqui.")
     if tipo == "CRAS":
         aviso += (" Cada CRAS atende uma área (território): o mais perto em linha reta pode não ser "
                   "o que atende o endereço da pessoa. Ela deve confirmar por telefone.")
