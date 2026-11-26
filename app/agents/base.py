@@ -4,21 +4,22 @@
         ┌──────────┐  pediu ferramenta?  ┌──────────────┐
   ──▶  │  pensar   │ ──────── sim ─────▶ │ ferramentas  │
         └──────────┘ ◀─── resultado ──── └──────────────┘
-             │ não (resposta final) ou passou do limite
-             ▼
-            FIM
+             │ não (resposta final)          passou do limite, repetiu o pedido
+             ▼                                ou a ferramenta falhou 2 vezes
+            FIM  ◀──────── responder ◀────────┘  (LLM responde SEM ferramentas)
 
 - O LLM NÃO executa nada: ele devolve um pedido (nome da ferramenta + argumentos).
 - Quem executa é o nosso código (ToolNode). O resultado volta para o LLM.
-- Guardrail em CÓDIGO: no máximo MAX_PASSOS voltas. Regra no prompt o modelo pode ignorar;
-  um "if" no código, não.
+- Guardrail em CÓDIGO: no máximo MAX_PASSOS voltas POR PERGUNTA. Regra no prompt o modelo pode
+  ignorar; um "if" no código, não. Ao bater no guardrail, o agente não desiste: responde com o
+  que já conseguiu, sem ferramentas.
 
 Agente = LLM + Ferramentas + Memória.
 """
 import json
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AIMessage, AnyMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -27,14 +28,34 @@ from app.config.settings import settings
 from app.llm import fabrica
 from app.llm.observabilidade import config_prompt
 from app.prompts import catalogo
-from app.utils.mensagens import turno_atual
+from app.utils.mensagens import conversa_limpa, turno_atual
 
 
 # Estado do agente: as mensagens, o perfil do usuário e quantas voltas o loop já deu.
 class EstadoAgente(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]  # add_messages = ACRESCENTA, não substitui
     perfil: str
-    passos: int  # contador de voltas, usado pelo guardrail
+    passos: int  # contador de voltas (informativo; o guardrail conta só o turno atual, ver _do_turno)
+
+
+def _do_turno(mensagens: list[AnyMessage]) -> list[AnyMessage]:
+    """Mensagens desde a última pergunta do usuário (a pergunta inclusive)."""
+    ultima = max((i for i, m in enumerate(mensagens) if isinstance(m, HumanMessage)), default=0)
+    return list(mensagens[ultima:])
+
+
+def _assinatura(chamada: dict) -> str:
+    """Nome + argumentos de uma chamada de ferramenta, para reconhecer pedidos repetidos."""
+    return chamada["name"] + json.dumps(chamada.get("args", {}), sort_keys=True, ensure_ascii=False)
+
+
+def _deu_erro(mensagem: AnyMessage) -> bool:
+    """O resultado da ferramenta foi {"erro": ...}?"""
+    try:
+        conteudo = json.loads(mensagem.content)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(conteudo, dict) and "erro" in conteudo
 
 
 def criar_agente(nome: str, nome_prompt: str, ferramentas: list, checkpointer=None):
@@ -77,25 +98,58 @@ def criar_agente(nome: str, nome_prompt: str, ferramentas: list, checkpointer=No
         ultima = estado["messages"][-1]
         if not getattr(ultima, "tool_calls", None):
             return END                      # resposta final
-        if estado.get("passos", 0) >= settings.max_passos_agente:
-            return "limite"                 # guardrail
+        turno = _do_turno(estado["messages"])
+        # Guardrails, contados SÓ neste turno (o estado é salvo entre perguntas pelo checkpointer):
+        # 1) voltas demais;
+        pedidos = [m for m in turno if getattr(m, "tool_calls", None)]
+        if len(pedidos) >= settings.max_passos_agente:
+            return "responder"
+        # 2) o modelo repetiu um pedido que já fez (mesma ferramenta, mesmos argumentos);
+        anteriores = {_assinatura(c) for m in pedidos[:-1] for c in m.tool_calls}
+        if all(_assinatura(c) in anteriores for c in ultima.tool_calls):
+            return "responder"
+        # 3) a ferramenta já falhou duas vezes: insistir não vai ajudar.
+        if sum(_deu_erro(m) for m in turno if m.type == "tool") >= 2:
+            return "responder"
         return "ferramentas"
 
-    # Nó "limite": responde com um aviso quando o loop passa do número máximo de voltas.
+    # Nó "responder": em vez de desistir, o LLM responde SEM ferramentas, com o que já conseguiu.
+    def responder(estado: EstadoAgente) -> dict:
+        try:
+            prompt = catalogo.obter(nome_prompt)
+            sistema = SystemMessage(prompt.compile(perfil=estado.get("perfil", "não informado")))
+            turno = _do_turno(estado["messages"])
+            resultados = [m.content for m in turno if m.type == "tool"][-3:]
+            instrucao = SystemMessage(
+                "Você já consultou as ferramentas. NÃO peça outra ferramenta: responda agora à pessoa "
+                "usando só estes resultados. Se algum trouxer 'erro' ou 'alternativa', explique com calma "
+                "e passe a alternativa. Nunca invente endereços ou telefones.\n\nResultados:\n"
+                + ("\n---\n".join(resultados) or "nenhum resultado útil")
+            )
+            # Sem bind_tools: o modelo não tem como pedir ferramenta. Os resultados vão como texto.
+            mensagens = [sistema] + conversa_limpa(estado["messages"][:-len(turno)]) + [turno[0], instrucao]
+            resposta = fabrica.criar_modelo(temperatura=0.1).invoke(mensagens, config=config_prompt(prompt))
+            return {"messages": [AIMessage(content=resposta.content, name=nome)]}
+        except Exception as erro:
+            print(f"[{nome}] não consegui montar a resposta final: {erro}")
+            return limite(estado)
+
+    # Nó "limite": último recurso, quando nem a resposta final sem ferramentas deu certo.
     def limite(estado: EstadoAgente) -> dict:
-        aviso = "Não consegui concluir a consulta em poucos passos. Pode reformular a pergunta?"
+        aviso = ("Não consegui concluir a consulta agora. Pode tentar de novo em instantes "
+                 "ou informar a cidade e o estado?")
         return {"messages": [AIMessage(content=aviso, name=nome)]}
 
     # Monta o grafo: pensar -> (ferramentas -> pensar)... até a resposta final ou o limite.
     g = StateGraph(EstadoAgente)
     g.add_node("pensar", pensar)
     g.add_node("ferramentas", ToolNode(ferramentas))  # ToolNode executa as ferramentas pedidas pelo LLM
-    g.add_node("limite", limite)
+    g.add_node("responder", responder)
     g.add_edge(START, "pensar")
-    # Depois de "pensar", a função proximo() escolhe o caminho: ferramentas, limite ou END.
-    g.add_conditional_edges("pensar", proximo, ["ferramentas", "limite", END])
+    # Depois de "pensar", a função proximo() escolhe o caminho: ferramentas, responder ou END.
+    g.add_conditional_edges("pensar", proximo, ["ferramentas", "responder", END])
     g.add_edge("ferramentas", "pensar")     # o resultado volta para o LLM
-    g.add_edge("limite", END)
+    g.add_edge("responder", END)
     return g.compile(checkpointer=checkpointer, name=nome)
 
 
