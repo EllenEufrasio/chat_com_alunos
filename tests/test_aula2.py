@@ -39,3 +39,13 @@ def test_sessoes_nao_se_misturam(api):
 def test_mensagem_vazia_da_erro_422(api):
     """Mensagem vazia é barrada pelo schema (min_length=1) antes de chegar ao LLM."""
     assert api.post("/chat", json={"mensagem": "", "sessao": "x"}).status_code == 422
+
+
+# CORS: o navegador só aceita a resposta se a API liberar a origem da página.
+def test_cors_libera_a_landing_e_a_rede_local(api):
+    for origem in ("https://pasi-landing-page.onrender.com", "http://localhost:5173",
+                   "http://192.168.17.13:5173", "http://10.0.0.5:5173"):
+        r = api.options("/chat", headers={"Origin": origem, "Access-Control-Request-Method": "POST"})
+        assert r.headers.get("access-control-allow-origin") == origem, origem
+    r = api.options("/chat", headers={"Origin": "https://site-qualquer.com", "Access-Control-Request-Method": "POST"})
+    assert "access-control-allow-origin" not in r.headers
