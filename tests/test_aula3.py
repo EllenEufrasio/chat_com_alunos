@@ -33,8 +33,8 @@ def test_perfil_entra_no_prompt(falso):
 def test_api_perfil_e_conversas(api):
     api.put("/usuarios/caio/perfil", json={"nome": "Caio", "experiencia": "iniciante"})
     assert api.get("/usuarios/caio/perfil").json()["nome"] == "Caio"
-    api.post("/chat", json={"mensagem": "O que é CDI?", "sessao": "c1", "usuario": "caio"})
-    assert api.get("/usuarios/caio/conversas").json()[0]["titulo"] == "O que é CDI?"
+    api.post("/chat", json={"mensagem": "O que é o CRAS?", "sessao": "c1", "usuario": "caio"})
+    assert api.get("/usuarios/caio/conversas").json()[0]["titulo"] == "O que é o CRAS?"
 
 
 # Sem chaves do Langfuse, o prompt vem do .md e {{perfil}} é preenchido.

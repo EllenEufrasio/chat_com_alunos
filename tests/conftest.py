@@ -1,5 +1,5 @@
 # tests/conftest.py
-"""Peças falsas para testar SEM gastar chamadas de API (LLM, MongoDB e APIs de mercado).
+"""Peças falsas para testar SEM gastar chamadas de API (LLM, MongoDB e APIs públicas: CNES, MDS, IBGE, CEP).
 
 Por que testar com peças falsas? O LLM não é determinístico e custa tokens.
 Aqui testamos o NOSSO código: se o fluxo, as ferramentas e a memória funcionam.
@@ -18,13 +18,9 @@ for chave in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "API_URL"):
 
 from app.llm import fabrica  # noqa: E402
 
-ARGS_PADRAO = {
-    "indicadores_economicos": {},
-    "cotacao_acao": {"ticker": "PETR4"},
-    "indicadores_fii": {"ticker": "MXRF11"},
-    "tesouro_direto": {"simbolo": "tesouro-selic-01032031"},
-    "simular_investimento": {"valor": 1000, "meses": 24, "percentual_cdi": 110},
-    "buscar_unidade": {"tipo": "CAPS", "municipio": "Mauá", "uf": "SP"},
+ARGS_PADRAO = {  # argumentos que o modelo falso usa ao pedir cada ferramenta
+    "buscar_caps": {"municipio": "Mauá", "uf": "SP"},
+    "buscar_cras_creas": {"tipo": "CRAS", "municipio": "Mauá", "uf": "SP"},
 }
 
 
@@ -34,7 +30,7 @@ class ModeloFalso:
     def __init__(self):
         self.rota = "conversa"       # o que o roteador falso vai responder
         self.ferramenta = None       # qual ferramenta o agente falso vai pedir
-        self.chamadas = []           # registro: "roteador", "revisor", "tool:cotacao_acao", "resposta"
+        self.chamadas = []           # registro: "roteador", "revisor", "tool:buscar_caps", "resposta"
         self.vistas = []             # mensagens recebidas na última chamada
         self._ferramentas = []
 
@@ -83,21 +79,7 @@ class ModeloFalso:
 
 
 def get_json_falso(url, params=None):
-    """Imita as respostas documentadas do Banco Central e da brapi."""
-    if "bcb.gov.br" in url:
-        valores = {"432": "15.00", "4389": "14.90", "13522": "4.80"}
-        return [{"data": "21/10/2026", "valor": valores[url.split("sgs.")[1].split("/")[0]]}]
-    if "stocks/quote" in url:
-        return {"results": [{"symbol": "PETR4", "data": {
-            "longName": "Petróleo Brasileiro S.A. - Petrobras", "regularMarketPrice": 38.45,
-            "regularMarketChangePercent": 0.92, "regularMarketTime": "2026-10-21T20:07:00.000Z"}}]}
-    if "fii/indicators" in url:
-        return {"fiis": [{"symbol": "MXRF11", "asOfDate": "2026-09-30", "price": 9.30,
-                          "priceToNav": 0.97, "dividendYield12m": 0.124, "segmentType": "Papel"}]}
-    if "treasury/indicators" in url:
-        return {"results": [{"symbol": "tesouro-selic-01032031", "bondType": "Tesouro Selic",
-                             "maturityDate": "2031-03-01", "baseDate": "2026-10-21", "buyRate": 0.08,
-                             "buyPrice": 18944.78, "rateInfo": {"description": "spread sobre a Selic"}}]}
+    """Imita as respostas documentadas das APIs públicas (IBGE, ViaCEP, BrasilAPI, MDS e CNES)."""
     if "servicodados.ibge.gov.br" in url:  # lista de cidades de uma UF
         return [{"id": 3529401, "nome": "Mauá"}, {"id": 3550308, "nome": "São Paulo"}]
     if "viacep.com.br" in url:  # CEP -> cidade (só o CEP de teste existe)
@@ -158,7 +140,7 @@ def falso(monkeypatch):
         from langgraph.checkpoint.memory import InMemorySaver
 
         from app.repository import checkpointer, mongo
-        banco = mongomock.MongoClient().finbot_teste
+        banco = mongomock.MongoClient().pasibot_teste
         monkeypatch.setattr(mongo, "banco", lambda: banco)
         monkeypatch.setattr(checkpointer, "criar_checkpointer", InMemorySaver)
         from app.agents import grafo
@@ -166,13 +148,7 @@ def falso(monkeypatch):
     except ImportError:
         pass
 
-    try:  # Aula 4+: APIs de mercado falsas
-        from app.tools import mercado
-        monkeypatch.setattr(mercado, "get_json", get_json_falso)
-    except ImportError:
-        pass
-
-    try:  # Aula 4 (PASIbot): APIs do CNES e do IBGE falsas
+    try:  # Aula 4: APIs do CNES, do MDS, do IBGE e de CEP falsas
         from app.tools import unidades
         monkeypatch.setattr(unidades, "get_json", get_json_falso)
         unidades._municipios_da_uf.cache_clear()

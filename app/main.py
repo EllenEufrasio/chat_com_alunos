@@ -11,7 +11,7 @@ from app.api.rotas import router
 
 # Cria a aplicação. title e description aparecem no topo da página /docs.
 # O uvicorn procura esta variável: "app.main:app" = arquivo app/main.py, variável app.
-app = FastAPI(title="FinBot API", description="Chat educacional de investimentos — FATEC / PLN")
+app = FastAPI(title="PASIBot API", description="Assistente do PASI: CRAS, CREAS e CAPS — FATEC / PLN")
 # Libera o navegador da landing page do PASI (e do Vite local) para chamar a API.
 # Sem isso, o navegador bloqueia as chamadas feitas a partir de outro domínio (CORS).
 app.add_middleware(

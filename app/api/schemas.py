@@ -25,7 +25,7 @@ class Resposta(BaseModel):
 
 class Mensagem(BaseModel):
     """Uma mensagem do histórico, devolvida em GET /sessoes/{sessao}/mensagens."""
-    papel: str      # "user" (pessoa) ou "assistant" (FinBot)
+    papel: str      # "user" (pessoa) ou "assistant" (PASIBot)
     conteudo: str   # o texto da mensagem
     agente: str | None = None  # qual agente escreveu a mensagem
 

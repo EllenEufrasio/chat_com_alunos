@@ -1,13 +1,17 @@
 # app/tools/unidades.py
-"""Aula 4 — Ferramenta (tool) que encontra a unidade de atendimento mais próxima:
-CAPS (saúde mental), CRAS (assistência social básica) ou CREAS (violação de direitos).
+"""Aula 4 — Ferramentas (tools) que encontram as unidades públicas de atendimento perto da pessoa.
 
-O que o modelo vê da ferramenta: o NOME, a DESCRIÇÃO (docstring) e os ARGUMENTOS.
+Duas ferramentas, uma para cada fonte de dados (como no FinBot, uma ferramenta por API):
+- buscar_caps: CAPS (saúde mental), no CNES do Ministério da Saúde.
+- buscar_cras_creas: CRAS (assistência social básica) e CREAS (violação de direitos), no cadastro do SUAS.
+
+O que o modelo vê de cada ferramenta: o NOME, a DESCRIÇÃO (docstring) e os ARGUMENTOS.
 A descrição é a única instrução que ele tem para decidir quando chamar:
-descrição vaga = chamada errada. Por isso a docstring abaixo é detalhada.
+descrição vaga = chamada errada. Por isso as docstrings abaixo são detalhadas.
 
 Fontes gratuitas (sem cadastro e sem token):
-- CNES / Ministério da Saúde: estabelecimentos de saúde. codigo_tipo_unidade=70 = CAPS.
+- CNES / Ministério da Saúde: estabelecimentos de saúde. codigo_tipo_unidade=70 = CAPS. Exemplo:
+  https://apidadosabertos.saude.gov.br/cnes/estabelecimentos?codigo_tipo_unidade=70&codigo_municipio=355030&limit=10
 - MDS (cadastro de equipamentos do SUAS, o mesmo do mapa MOPS): CRAS e CREAS.
   Reserva: se o MDS cair, usamos app/data/unidades_suas_2019.csv (Censo SUAS 2019, ver
   scripts/gerar_base_suas.py). Desde 21/10/2026 o MDS está fora do ar para manutenção.
@@ -16,6 +20,8 @@ Fontes gratuitas (sem cadastro e sem token):
 - BrasilAPI (CEP v2): CEP -> latitude e longitude, para ordenar por distância.
 
 O CNES e o MDS usam o código IBGE da cidade SEM o último dígito (São Paulo = 355030).
+
+Teste sem LLM:  python -m app.tools.unidades
 """
 import csv
 import math
@@ -37,7 +43,6 @@ IBGE = "https://servicodados.ibge.gov.br/api/v1/localidades/estados/{uf}/municip
 VIACEP = "https://viacep.com.br/ws/{cep}/json/"
 BRASILAPI_CEP = "https://brasilapi.com.br/api/cep/v2/{cep}"
 
-TIPOS = ("CAPS", "CRAS", "CREAS")
 FONTES = {
     "CAPS": "CNES / Ministério da Saúde",
     "CRAS": "MDS - cadastro de equipamentos do SUAS",
@@ -279,112 +284,131 @@ def _limpar(u: dict) -> dict:
     return {k: v for k, v in u.items() if not k.startswith("_") and v not in (None, "")}
 
 
-# ---------- A ferramenta ----------
-# @tool transforma a função em ferramenta que o LLM pode pedir; @_seguro protege contra erros.
-@tool
-@_seguro
-def buscar_unidade(tipo: str, cep: str = "", municipio: str = "", uf: str = "",
-                   modalidade: str = "", bairro: str = "") -> dict:
-    """Encontra unidades públicas de atendimento perto do usuário, com nome, endereço, bairro,
-    telefone e (quando houver) horário e distância. Dados oficiais do governo federal.
-    Use DEPOIS de entender qual serviço a pessoa precisa, quando ela quiser saber ONDE ir.
-    NÃO use para explicar o que é cada serviço.
-    tipo: obrigatório, um destes:
-      "CAPS"  = saúde mental (sofrimento psíquico intenso, álcool e outras drogas);
-      "CRAS"  = assistência social básica (Cadastro Único, Bolsa Família, BPC, orientação à família);
-      "CREAS" = violação de direitos (violência, abuso, negligência, trabalho infantil).
-    Localização, informe UMA opção:
-      cep: se o usuário deu um CEP, passe SÓ o cep (ex.: "09321-090") e deixe municipio e uf
-        vazios. A ferramenta descobre a cidade e ordena da unidade mais perto para a mais longe.
-        Nunca tente adivinhar a cidade a partir do CEP.
-      municipio + uf: nome da cidade (ex.: "Mauá") e sigla do estado com 2 letras (ex.: "SP").
-    Se o usuário não deu nem CEP nem cidade, pergunte antes de chamar.
-    modalidade: só para CAPS, opcional. "AD" = álcool e drogas; "IJ" = crianças e adolescentes.
-    bairro: opcional, filtra pelo bairro, ex.: "Centro"."""
-    tipo = _normalizar(tipo).replace(" ", "")
-    if tipo not in TIPOS:
-        return {"erro": f"tipo '{tipo}' inválido. Use um destes: {', '.join(TIPOS)}."}
-    fonte = FONTES[tipo]
-
+# ---------- Partes comuns às duas ferramentas (sem @tool) ----------
+def _onde(cep: str, municipio: str, uf: str) -> dict:
+    """Descobre a cidade (e, com CEP, o ponto de partida). Devolve {"erro": ...} se não der."""
     # Robustez: se o modelo mandou o CEP no lugar da cidade, tratamos como CEP.
     if not cep and len(re.sub(r"\D", "", municipio or "")) == 8:
         cep, municipio = municipio, ""
-
-    local = None
     if cep:
         local = localizar_cep(cep)
         if not local:
             return {"erro": f"não encontrei o CEP '{cep}'. Confira os 8 números do CEP "
                             "ou informe a cidade e o estado.", "fonte": "ViaCEP"}
-        nome_cidade, uf, codigo = local["cidade"], local["uf"], local["codigo"]
-    else:
-        if not municipio or not uf:
-            return {"erro": "faltou a cidade e o estado (ou o CEP). Pergunte ao usuário."}
-        achado = codigo_municipio(municipio, uf)
-        if not achado:
-            return {"erro": f"não encontrei a cidade '{municipio}' no estado '{uf}'. "
-                            "Confira o nome e a sigla do estado.", "fonte": "IBGE"}
-        nome_cidade, codigo = achado
+        return {"local": local, "cidade": local["cidade"], "uf": local["uf"], "codigo": local["codigo"]}
+    if not municipio or not uf:
+        return {"erro": "faltou a cidade e o estado (ou o CEP). Pergunte ao usuário."}
+    achado = codigo_municipio(municipio, uf)
+    if not achado:
+        return {"erro": f"não encontrei a cidade '{municipio}' no estado '{uf}'. "
+                        "Confira o nome e a sigla do estado.", "fonte": "IBGE"}
+    return {"local": None, "cidade": achado[0], "uf": uf.strip().upper(), "codigo": achado[1]}
 
-    usou_reserva = False
-    if tipo == "CAPS":
-        unidades = _caps_do_municipio(codigo)
-        modalidade = (modalidade or "").strip().upper()
-        unidades = [u for u in unidades if _modalidade_confere(u["nome"] or "", modalidade)]
-    else:
-        unidades, usou_reserva = _suas_com_reserva(codigo, tipo)
-        if usou_reserva:
-            fonte = FONTE_SUAS_LOCAL
-        if usou_reserva and not unidades:
-            # Nem o MDS nem a cópia local têm a cidade: indicamos quem pode informar, sem inventar.
-            return {"erro": f"o cadastro de {tipo} do MDS está fora do ar e a cópia local não tem "
-                            f"{tipo} para {nome_cidade}/{uf.upper()}.",
-                    "alternativa": "A pessoa pode ligar para a prefeitura (Secretaria de Assistência "
-                                   f"Social) ou procurar no mapa oficial do governo ({MOPS}), "
-                                   "quando ele voltar ao ar.",
-                    "fonte": fonte}
 
+def _resposta(tipo: str, unidades: list[dict], onde: dict, fonte: str, aviso: str, bairro: str = "") -> dict:
+    """Filtra pelo bairro, ordena pela distância (com CEP) e devolve só os campos úteis e a fonte."""
     if bairro:
         unidades = [u for u in unidades if _normalizar(bairro) in _normalizar(u.get("bairro"))]
-
-    resposta = {"tipo": tipo, "municipio": f"{nome_cidade}/{uf.upper()}"}
+    resposta = {"tipo": tipo, "municipio": f"{onde['cidade']}/{onde['uf']}"}
+    local = onde["local"]
     if local:
         resposta["referencia"] = f"CEP {local['cep']}, bairro {local['bairro'] or 'não informado'}"
-
     if not unidades:
         return {**resposta, "total": 0, "unidades": [],
                 "aviso": f"Nenhum {tipo} encontrado com esses filtros. A pessoa pode procurar a "
                          "prefeitura (Secretaria de Saúde ou de Assistência Social) da cidade.",
                 "fonte": fonte}
-
     limite = MAX_RESULTADOS
     if local:
         unidades, criterio = _ordenar_por_proximidade(unidades, local)
         resposta["ordenado_por"] = criterio
         limite = MAIS_PROXIMOS
+    return {**resposta, "total": len(unidades),
+            "unidades": [_limpar(u) for u in unidades[:limite]],
+            "aviso": aviso + " Copie nomes, endereços e telefones exatamente como estão aqui.",
+            "fonte": fonte}
 
-    aviso = ("Dados do cadastro oficial; horários e telefones podem mudar. Recomende ligar antes de ir. "
-             "Copie nomes, endereços e telefones exatamente como estão aqui.")
+
+# ---------- As ferramentas ----------
+# @tool transforma a função em ferramenta que o LLM pode pedir; @_seguro protege contra erros.
+@tool
+@_seguro
+def buscar_caps(cep: str = "", municipio: str = "", uf: str = "", modalidade: str = "",
+                bairro: str = "") -> dict:
+    """Encontra os CAPS (Centros de Atenção Psicossocial, do SUS) de uma cidade, com nome, endereço,
+    bairro, telefone, horário de atendimento e, com CEP, a distância. Dados oficiais do CNES.
+    Use quando a pessoa quiser saber ONDE fica um CAPS: saúde mental, sofrimento psíquico intenso,
+    crise, uso de álcool ou outras drogas. NÃO use para explicar o que é o CAPS.
+    Localização, informe UMA opção:
+      cep: se o usuário deu um CEP, passe SÓ o cep (ex.: "09321-090") e deixe municipio e uf vazios.
+        A ferramenta descobre a cidade e ordena do CAPS mais perto para o mais longe.
+      municipio + uf: nome da cidade (ex.: "Mauá") e sigla do estado com 2 letras (ex.: "SP").
+    Se o usuário não deu nem CEP nem cidade, pergunte antes de chamar.
+    modalidade: opcional. "AD" = álcool e drogas; "IJ" = crianças e adolescentes (CAPSi).
+    bairro: opcional, filtra pelo bairro, ex.: "Centro"."""
+    onde = _onde(cep, municipio, uf)
+    if "erro" in onde:
+        return onde
+    unidades = _caps_do_municipio(onde["codigo"])
+    modalidade = (modalidade or "").strip().upper()
+    unidades = [u for u in unidades if _modalidade_confere(u["nome"] or "", modalidade)]
+    aviso = "Dados do cadastro oficial; horários e telefones podem mudar. Recomende ligar antes de ir."
+    return _resposta("CAPS", unidades, onde, FONTES["CAPS"], aviso, bairro)
+
+
+@tool
+@_seguro
+def buscar_cras_creas(tipo: str, cep: str = "", municipio: str = "", uf: str = "",
+                      bairro: str = "") -> dict:
+    """Encontra os CRAS ou os CREAS de uma cidade, com nome, endereço, bairro, telefone e, com CEP,
+    a distância. Dados do cadastro do SUAS (Ministério do Desenvolvimento e Assistência Social).
+    Use quando a pessoa quiser saber ONDE fica um CRAS ou um CREAS. NÃO use para explicar os serviços.
+    tipo: obrigatório, um destes:
+      "CRAS"  = assistência social básica (Cadastro Único, Bolsa Família, BPC, orientação à família);
+      "CREAS" = violação de direitos (violência, abuso, negligência, abandono, trabalho infantil).
+    Para CAPS (saúde mental), use buscar_caps.
+    Localização, informe UMA opção:
+      cep: se o usuário deu um CEP, passe SÓ o cep (ex.: "09321-090") e deixe municipio e uf vazios.
+        A ferramenta descobre a cidade e ordena da unidade mais perto para a mais longe.
+      municipio + uf: nome da cidade (ex.: "Mauá") e sigla do estado com 2 letras (ex.: "SP").
+    Se o usuário não deu nem CEP nem cidade, pergunte antes de chamar.
+    bairro: opcional, filtra pelo bairro, ex.: "Centro"."""
+    tipo = _normalizar(tipo).replace(" ", "")
+    if tipo not in ("CRAS", "CREAS"):
+        return {"erro": f"tipo '{tipo}' inválido. Use \"CRAS\" ou \"CREAS\" (para CAPS, use buscar_caps)."}
+    onde = _onde(cep, municipio, uf)
+    if "erro" in onde:
+        return onde
+    unidades, usou_reserva = _suas_com_reserva(onde["codigo"], tipo)
+    fonte = FONTE_SUAS_LOCAL if usou_reserva else FONTES[tipo]
+    if usou_reserva and not unidades:
+        # Nem o MDS nem a cópia local têm a cidade: indicamos quem pode informar, sem inventar.
+        return {"erro": f"o cadastro de {tipo} do MDS está fora do ar e a cópia local não tem "
+                        f"{tipo} para {onde['cidade']}/{onde['uf']}.",
+                "alternativa": "A pessoa pode ligar para a prefeitura (Secretaria de Assistência "
+                               f"Social) ou procurar no mapa oficial do governo ({MOPS}), "
+                               "quando ele voltar ao ar.",
+                "fonte": fonte}
     if usou_reserva:
         aviso = ("O cadastro do MDS está fora do ar. Estes dados são do Censo SUAS de 2019 e podem estar "
-                 "desatualizados: diga isso à pessoa e recomende ligar antes de ir ou confirmar com a "
-                 "prefeitura. Copie nomes, endereços e telefones exatamente como estão aqui.")
+                 "desatualizados: diga isso à pessoa e recomende ligar antes de ir ou confirmar com a prefeitura.")
+    else:
+        aviso = "Dados do cadastro oficial; horários e telefones podem mudar. Recomende ligar antes de ir."
     if tipo == "CRAS":
         aviso += (" Cada CRAS atende uma área (território): o mais perto em linha reta pode não ser "
                   "o que atende o endereço da pessoa. Ela deve confirmar por telefone.")
-    return {**resposta, "total": len(unidades),
-            "unidades": [_limpar(u) for u in unidades[:limite]],
-            "aviso": aviso, "fonte": fonte}
+    return _resposta(tipo, unidades, onde, fonte, aviso, bairro)
 
 
 # Lista com as ferramentas do PASIbot; é ela que entregamos ao agente.
-FERRAMENTAS_PASI = [buscar_unidade]
+FERRAMENTAS_PASI = [buscar_caps, buscar_cras_creas]
 
 
 if __name__ == "__main__":
-    # python -m app.tools.unidades  -> testa as APIs sem LLM
+    # python -m app.tools.unidades  -> testa as APIs sem LLM (olhe os dados antes de entregar ao LLM)
     from pprint import pprint
-    pprint(buscar_unidade.invoke({"tipo": "CAPS", "cep": "09321-090"}))    # CEP de Mauá
-    pprint(buscar_unidade.invoke({"tipo": "CRAS", "cep": "09321-090"}))
-    pprint(buscar_unidade.invoke({"tipo": "CREAS", "municipio": "Mauá", "uf": "SP"}))
-    pprint(buscar_unidade.invoke({"tipo": "CAPS", "cep": "02036-021", "modalidade": "AD"}))  # São Paulo
+    pprint(buscar_caps.invoke({"municipio": "São Paulo", "uf": "SP"}))      # exemplo da professora (355030)
+    pprint(buscar_caps.invoke({"cep": "09321-090"}))                        # CEP de Mauá
+    pprint(buscar_caps.invoke({"cep": "02036-021", "modalidade": "AD"}))    # CAPS AD em São Paulo
+    pprint(buscar_cras_creas.invoke({"tipo": "CRAS", "cep": "09321-090"}))
+    pprint(buscar_cras_creas.invoke({"tipo": "CREAS", "municipio": "Mauá", "uf": "SP"}))

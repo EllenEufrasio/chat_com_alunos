@@ -2,7 +2,7 @@
 # As chaves (sync: false) são pedidas na tela do Render, nunca ficam no GitHub.
 services:
   - type: web                   # serviço web: fica no ar respondendo pedidos HTTP
-    name: finbot-api            # nome no painel (vira parte da URL)
+    name: finbot-api            # nome no painel (vira parte da URL). Mantido: mudar cria outro serviço e outra URL, e a landing do PASI usa esta
     runtime: python
     plan: free                  # plano gratuito: "dorme" depois de um tempo sem uso
     buildCommand: pip install -r requirements.txt                    # instala as dependências

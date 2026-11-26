@@ -20,7 +20,7 @@ def test_chat_responde(api):
 
 
 def test_chat_envia_o_historico_ao_modelo(api, falso):
-    """Na 2ª pergunta, a 1ª vai junto: é assim que o FinBot "lembra" da conversa."""
+    """Na 2ª pergunta, a 1ª vai junto: é assim que o PASIBot "lembra" da conversa."""
     api.post("/chat", json={"mensagem": "Meu nome é Ana", "sessao": "s2"})
     api.post("/chat", json={"mensagem": "Qual é meu nome?", "sessao": "s2"})
     # falso.vistas guarda as mensagens que o modelo recebeu na última chamada.

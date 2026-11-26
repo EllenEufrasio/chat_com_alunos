@@ -1,14 +1,23 @@
-<<<<<<< HEAD
 # PASIBot
-=======
-# PASIbot
->>>>>>> 4fec6cc0c0ddc2ad035a08abf6add8b75feb2960
 
-Assistente educacional para aprender conceitos sobre investimentos no Brasil. Este projeto está sendo desenvolvido passo a passo como parte das aulas.
+Assistente do [PASI](https://pasi-landing-page.onrender.com) (Plataforma de Atendimento de Sistemas Integrados), projeto de TCC da Fatec Mauá. Ele orienta sobre os serviços públicos de assistência social e saúde mental (CRAS, CREAS e CAPS), ajuda a pessoa a entender qual procurar e encontra a unidade mais perto dela. Este projeto está sendo desenvolvido passo a passo como parte das aulas.
 
 ## Etapa atual
 
-Na Aula 1, o projeto tem uma conversa inicial pelo terminal. O PASIbot responde a perguntas gerais sobre investimentos e mantém o histórico durante a conversa.
+Na Aula 4, o PASIBot virou um **agente com ferramentas**: em vez de inventar endereços, ele consulta dados reais.
+
+| Ferramenta | O que busca | Fonte |
+|---|---|---|
+| `buscar_caps` | CAPS de uma cidade ou perto de um CEP | CNES / Ministério da Saúde (API pública, sem token) |
+| `buscar_cras_creas` | CRAS ou CREAS de uma cidade ou perto de um CEP | Cadastro do SUAS (MDS). Enquanto o MDS estiver fora do ar, usa a cópia do Censo SUAS 2019 em `app/data/` e avisa que pode estar desatualizada |
+
+Para testar as ferramentas sozinhas, sem o LLM:
+
+```powershell
+python -m app.tools.unidades
+```
+
+Próxima etapa (Aula 5, RAG): textos oficiais do gov.br na pasta `documentos/`, explicando o que é cada serviço, quem pode ser atendido e como acessar.
 
 ## Requisitos
 
