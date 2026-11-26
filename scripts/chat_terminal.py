@@ -15,7 +15,7 @@ modelo = criar_modelo()
 # a cada pergunta, mandamos a conversa inteira de novo.
 historico = [SystemMessage(catalogo.carregar("sistema"))]
 
-print(f"FinBot ({settings.llm_provedor} / {settings.modelo}) — digite 'sair' para encerrar\n")
+print(f"PASIBot ({settings.llm_provedor} / {settings.modelo}) — digite 'sair' para encerrar\n")
 while True:
     pergunta = input("Você: ").strip()
     if pergunta.lower() in ("sair", "exit"):
@@ -26,4 +26,4 @@ while True:
     resposta = modelo.invoke(historico)          # AIMessage
     historico.append(resposta)
     tokens = resposta.usage_metadata or {}
-    print(f"\nFinBot: {resposta.content}\n   [tokens: entrada={tokens.get('input_tokens')} saída={tokens.get('output_tokens')}]\n")
+    print(f"\nPASIBot: {resposta.content}\n   [tokens: entrada={tokens.get('input_tokens')} saída={tokens.get('output_tokens')}]\n")
